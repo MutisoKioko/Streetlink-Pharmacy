@@ -12,9 +12,17 @@
   <input type="number" id="quantity" placeholder="Quantity" required>
   <input type="text" id="category" placeholder="Category">
   <input type="text" id="supplier" placeholder="Supplier">
+  <label for="expiry_date">Expiry Date:</label>
   <input type="date" id="expiry_date">
   <button type="submit">Add Product</button>
 </form>
+<div style="margin: 15px 0;">
+  <input type="text" id="search-name" placeholder="Search by name">
+  <button onclick="searchProducts()">Search</button>
+  <button onclick="showLowStock()">Show Low Stock</button>
+  <button onclick="showExpiringSoon()">Show Expiring Soon</button>
+  <button onclick="loadProducts()">Show All</button>
+</div>
 
 <table id="product-table" border="1">
   <thead>
@@ -33,32 +41,60 @@
   </tbody>
 </table>
 <script>
-  async function loadProducts() {
-    const response = await fetch('/products');
-    const products = await response.json();
+  function displayProducts(products) {
+  const tbody = document.getElementById('product-table-body');
+  tbody.innerHTML = '';
 
-    const tbody = document.getElementById('product-table-body');
-    tbody.innerHTML = '';
-
-    products.forEach(product => {
-      const row = document.createElement('tr');
-      row.id = `row-${product.id}`;
-      row.innerHTML = `
-        <td>${product.id}</td>
-        <td>${product.name}</td>
-        <td>${product.price}</td>
-        <td>${product.quantity}</td>
-        <td>${product.category || ''}</td>
-        <td>${product.supplier || ''}</td>
-        <td>${product.expiry_date || ''}</td>
-        <td>
+  products.forEach(product => {
+    const row = document.createElement('tr');
+    row.id = `row-${product.id}`;
+    row.innerHTML = `
+      <td>${product.id}</td>
+      <td>${product.name}</td>
+      <td>${product.price}</td>
+      <td>${product.quantity}</td>
+      <td>${product.category || ''}</td>
+      <td>${product.supplier || ''}</td>
+      <td>${product.expiry_date || ''}</td>
+      <td>
           <button onclick="editProduct(${product.id})">Edit</button>
           <button onclick="deleteProduct(${product.id})">Delete</button>
-        </td>
+      </td>
     `;
-      tbody.appendChild(row);
-    });
+    tbody.appendChild(row);
+  });
+}
+
+async function loadProducts() {
+  const response = await fetch('/products');
+  const products = await response.json();
+  displayProducts(products);
+}
+
+async function searchProducts() {
+  const name = document.getElementById('search-name').value;
+  const response = await fetch(`/products/search?name=${encodeURIComponent(name)}`);
+  const products = await response.json();
+  displayProducts(products);
+}
+
+document.getElementById('search-name').addEventListener('keypress', (event) => {
+  if (event.key === 'Enter') {
+    searchProducts();
   }
+});
+
+async function showLowStock() {
+  const response = await fetch('/products/low-stock');
+  const products = await response.json();
+  displayProducts(products);
+}
+
+async function showExpiringSoon() {
+  const response = await fetch('/products/expiring-soon');
+  const products = await response.json();
+  displayProducts(products);
+}
 
   async function deleteProduct(id) {
    await fetch(`/products/${id}`, {

@@ -38,6 +38,49 @@ app.get('/products', (req, res) => {
   res.json(products);
 });
 
+app.get('/products/search', (req, res) => {
+  const { name, category } = req.query;
+
+  let sql = 'SELECT * FROM products WHERE 1=1';
+  const params = [];
+
+  if (name) {
+    sql += ' AND name LIKE ?';
+    params.push(`%${name}%`);
+  }
+  if (category) {
+    sql += ' AND category = ?';
+    params.push(category);
+  }
+
+  const stmt = db.prepare(sql);
+  const products = stmt.all(...params);
+
+  res.json(products);
+});
+
+app.get('/products/low-stock', (req, res) => {
+  const threshold = parseInt(req.query.threshold) || 10;
+
+  const stmt = db.prepare('SELECT * FROM products WHERE quantity <= ?');
+  const products = stmt.all(threshold);
+
+  res.json(products);
+});
+
+app.get('/products/expiring-soon', (req, res) => {
+  const days = parseInt(req.query.days) || 30;
+
+  const stmt = db.prepare(`
+    SELECT * FROM products
+    WHERE expiry_date IS NOT NULL
+    AND date(expiry_date) <= date('now', '+' || ? || ' days')
+  `);
+  const products = stmt.all(days);
+
+  res.json(products);
+});
+
 app.delete('/products/:id', (req, res) => {
   const { id } = req.params;
 
