@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard — Streetlink Pharmacy</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="top-bar">
+      <h1>Products</h1>
+      <div>
+        <span id="welcomeName"></span>
+        <button class="secondary" onclick="logout()">Log Out</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <input type="text" id="searchInput" placeholder="Search by product name...">
+      <div class="filter-bar">
+        <button id="filterAll" class="active" onclick="setFilter('all')">All</button>
+        <button id="filterLow" onclick="setFilter('low')">Low Stock</button>
+        <button id="filterExpiring" onclick="setFilter('expiring')">Expiring Soon</button>
+      </div>
+      <div id="errorBox" class="error" style="display:none;"></div>
+      <table id="productsTable">
+        <thead>
+          <tr>
+            <th>Name</th><th>Price</th><th>Qty</th><th>Category</th>
+            <th>Supplier</th><th>Expiry</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="productsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

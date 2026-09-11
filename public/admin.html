@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Admin — Streetlink Pharmacy</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="top-bar">
+      <h1>Admin Panel</h1>
+      <div>
+        <span id="welcomeName"></span>
+        <button class="secondary" onclick="logout()">Log Out</button>
+      </div>
+    </div>
+
+    <!-- Add Product -->
+    <div class="card">
+      <h2>Add New Product</h2>
+      <div id="addErrorBox" class="error" style="display:none;"></div>
+      <form id="addProductForm">
+        <input type="text" id="new-name" placeholder="Product name" required>
+        <input type="number" id="new-price" step="0.01" placeholder="Price" required>
+        <input type="number" id="new-quantity" placeholder="Quantity" required>
+        <input type="text" id="new-category" placeholder="Category">
+        <input type="text" id="new-supplier" placeholder="Supplier">
+        <input type="date" id="new-expiry">
+        <button type="submit">Add Product</button>
+      </form>
+    </div>
+
+    <!-- Register Staff -->
+    <div class="card">
+      <h2>Register New User</h2>
+      <div id="registerErrorBox" class="error" style="display:none;"></div>
+      <div id="registerSuccessBox" style="display:none; color: #0d6e6e; margin-bottom:12px;"></div>
+      <form id="registerForm">
+        <input type="text" id="reg-name" placeholder="Full name" required>
+        <input type="email" id="reg-email" placeholder="Email" required>
+        <input type="password" id="reg-password" placeholder="Password (min 6 chars)" required>
+        <select id="reg-role">
+          <option value="staff">Staff</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button type="submit">Register User</button>
+      </form>
+    </div>
+
+    <!-- Products -->
+    <div class="card">
+      <h2>All Products</h2>
+      <input type="text" id="searchInput" placeholder="Search by product name...">
+      <div id="errorBox" class="error" style="display:none;"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Price</th><th>Qty</th><th>Category</th>
+            <th>Supplier</th><th>Expiry</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="productsBody"></tbody>
+      </table>
+    </div>
+
+    <!-- History viewer -->
+    <div class="card" id="historyCard" style="display:none;">
+      <h2 id="historyTitle">Edit History</h2>
+      <button class="secondary" onclick="closeHistory()">Close</button>
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Old Value</th><th>New Value</th><th>Edited By</th><th>When</th></tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/admin.js"></script>
+</body>
+</html>

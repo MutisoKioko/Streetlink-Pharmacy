@@ -1,0 +1,54 @@
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+body { background: #f4f6f8; color: #1a1a1a; }
+
+.container { max-width: 900px; margin: 40px auto; padding: 20px; }
+
+.card {
+  background: white;
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+  margin-bottom: 20px;
+}
+
+h1, h2 { margin-bottom: 16px; }
+
+input, select {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+button {
+  background: #0d6e6e;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+button:hover { background: #095656; }
+button.danger { background: #b3261e; }
+button.danger:hover { background: #8f1e18; }
+button.secondary { background: #666; }
+
+.error { color: #b3261e; margin-bottom: 12px; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; font-size: 14px; }
+th { background: #f0f0f0; }
+
+.low-stock { background: #fff3cd; }
+.expiring { background: #ffe0e0; }
+
+.top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.filter-bar button { background: #ddd; color: #333; }
+.filter-bar button.active { background: #0d6e6e; color: white; }
+
+.edit-row td { background: #f9f9f9; }
+.edit-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.edit-form input { width: 120px; margin-bottom: 0; }
