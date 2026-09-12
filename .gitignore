@@ -2,3 +2,4 @@ node_modules/
 pharmacy.db
 *.log
 .env
+seedAdmin.js

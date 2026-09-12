@@ -52,3 +52,9 @@ th { background: #f0f0f0; }
 .edit-row td { background: #f9f9f9; }
 .edit-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .edit-form input { width: 120px; margin-bottom: 0; }
+
+button:disabled {
+  background: #ccc;
+  color: #888;
+  cursor: not-allowed;
+}
