@@ -52,16 +52,21 @@ function validateProduct(name, price, quantity, expiry_date, no_expiry) {
 
 // Computes each product's total stock and nearest expiry by aggregating its batches
 // and their ledger movements — quantity is always derived, never stored directly.
-function getProductsWithStock(whereClause = '', params = []) {
-  const products = db.prepare(`SELECT * FROM products ${whereClause}`).all(...params);
+// Every call is scoped to businessId: no product outside the caller's business is
+// ever visible, regardless of what whereClause/params the caller adds.
+function getProductsWithStock(businessId, whereClause = '', params = []) {
+  const scopedWhere = whereClause
+    ? `${whereClause} AND business_id = ?`
+    : 'WHERE business_id = ?';
+  const products = db.prepare(`SELECT * FROM products ${scopedWhere}`).all(...params, businessId);
 
   return products.map(p => {
     const batches = db.prepare(`
       SELECT b.id, b.expiry_date, b.supplier,
         COALESCE((SELECT SUM(quantity_change) FROM stock_movements WHERE batch_id = b.id), 0) AS remaining
       FROM batches b
-      WHERE b.product_id = ?
-    `).all(p.id);
+      WHERE b.product_id = ? AND b.business_id = ?
+    `).all(p.id, businessId);
 
     const total_quantity = batches.reduce((sum, b) => sum + b.remaining, 0);
     const stocked = batches.filter(b => b.remaining > 0);
@@ -85,6 +90,9 @@ function getProductsWithStock(whereClause = '', params = []) {
 
 // ==================== AUTH ====================
 
+// Admin adding staff: the new user belongs to the SAME business as the admin
+// creating them — never a hardcoded default. This is how a business grows its
+// own team without ever touching another business's users.
 app.post('/register', requireAuth, requireAdmin, async (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password) {
@@ -98,9 +106,9 @@ app.post('/register', requireAuth, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Email already registered' });
   }
   const password_hash = await bcrypt.hash(password, 10);
-  const stmt = db.prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)');
-  const result = stmt.run(name, email, password_hash, role || 'staff');
-  res.json({ id: result.lastInsertRowid, name, email, role: role || 'staff' });
+  const stmt = db.prepare('INSERT INTO users (name, email, password_hash, role, business_id) VALUES (?, ?, ?, ?, ?)');
+  const result = stmt.run(name, email, password_hash, role || 'staff', req.user.business_id);
+  res.json({ id: result.lastInsertRowid, name, email, role: role || 'staff', business_id: req.user.business_id });
 });
 
 app.post('/login', async (req, res) => {
@@ -117,11 +125,69 @@ app.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
   const token = jwt.sign(
-    { id: user.id, name: user.name, email: user.email, role: user.role },
+    { id: user.id, name: user.name, email: user.email, role: user.role, business_id: user.business_id },
     JWT_SECRET,
     { expiresIn: '8h' }
   );
-  res.json({ token, id: user.id, name: user.name, email: user.email, role: user.role });
+  res.json({ token, id: user.id, name: user.name, email: user.email, role: user.role, business_id: user.business_id });
+});
+
+// ==================== BUSINESS SIGNUP ====================
+
+// Public route — no login required, since a brand-new business has no
+// account yet. Creates the business AND its first (admin) user together in
+// one transaction, so you never end up with a business with no admin, or a
+// user with no business.
+app.post('/register-business', async (req, res) => {
+  const { business_name, admin_name, admin_email, admin_phone, admin_password } = req.body;
+
+  if (!business_name || typeof business_name !== 'string' || business_name.trim() === '') {
+    return res.status(400).json({ error: 'Business name is required' });
+  }
+  if (!admin_name || typeof admin_name !== 'string' || admin_name.trim() === '') {
+    return res.status(400).json({ error: 'Your name is required' });
+  }
+  if (!admin_email || typeof admin_email !== 'string' || admin_email.trim() === '') {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  if (!admin_phone || typeof admin_phone !== 'string' || admin_phone.trim() === '') {
+    return res.status(400).json({ error: 'Phone number is required' });
+  }
+  if (!admin_password || admin_password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(admin_email.trim());
+  if (existingUser) {
+    return res.status(400).json({ error: 'Email already registered' });
+  }
+
+  const password_hash = await bcrypt.hash(admin_password, 10);
+
+  const createBusinessAndAdmin = db.transaction(() => {
+    const insertBusiness = db.prepare('INSERT INTO businesses (name) VALUES (?)');
+    const businessResult = insertBusiness.run(business_name.trim());
+    const businessId = businessResult.lastInsertRowid;
+
+    const insertUser = db.prepare(`
+      INSERT INTO users (name, email, phone, password_hash, role, business_id)
+      VALUES (?, ?, ?, ?, 'admin', ?)
+    `);
+    const userResult = insertUser.run(admin_name.trim(), admin_email.trim(), admin_phone.trim(), password_hash, businessId);
+
+    return { businessId, userId: userResult.lastInsertRowid };
+  });
+
+  const { businessId, userId } = createBusinessAndAdmin();
+
+  res.json({
+    business_id: businessId,
+    user_id: userId,
+    business_name: business_name.trim(),
+    admin_name: admin_name.trim(),
+    admin_email: admin_email.trim(),
+    message: 'Business account created. You can now log in.'
+  });
 });
 
 // ==================== PRODUCTS ====================
@@ -134,28 +200,31 @@ app.post('/products', requireAuth, requireAdmin, (req, res) => {
     return res.status(400).json({ error });
   }
 
-  let product = db.prepare('SELECT * FROM products WHERE name = ?').get(name.trim());
+  // Scoped by business: two different pharmacies can both have a product
+  // named "Panadol" without colliding — they're different rows entirely.
+  let product = db.prepare('SELECT * FROM products WHERE name = ? AND business_id = ?')
+    .get(name.trim(), req.user.business_id);
 
   const wasExisting = !!product;
 
   const createBatchAndMovement = db.transaction(() => {
     if (!product) {
-      const insertProduct = db.prepare('INSERT INTO products (name, category, price, unit) VALUES (?, ?, ?, ?)');
-      const result = insertProduct.run(name.trim(), category || null, price, (unit && unit.trim()) || 'units');
+      const insertProduct = db.prepare('INSERT INTO products (name, category, price, unit, business_id) VALUES (?, ?, ?, ?, ?)');
+      const result = insertProduct.run(name.trim(), category || null, price, (unit && unit.trim()) || 'units', req.user.business_id);
       product = { id: result.lastInsertRowid, name: name.trim(), category, price, unit: (unit && unit.trim()) || 'units' };
     }
 
     const insertBatch = db.prepare(`
-      INSERT INTO batches (product_id, quantity_received, expiry_date, supplier, cost_price)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO batches (product_id, quantity_received, expiry_date, supplier, cost_price, business_id)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
-    const batchResult = insertBatch.run(product.id, quantity, expiry_date || null, supplier || null, cost_price != null ? cost_price : null);
+    const batchResult = insertBatch.run(product.id, quantity, expiry_date || null, supplier || null, cost_price != null ? cost_price : null, req.user.business_id);
 
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (batch_id, quantity_change, movement_type, user_id)
-      VALUES (?, ?, 'received', ?)
+      INSERT INTO stock_movements (batch_id, quantity_change, movement_type, user_id, business_id)
+      VALUES (?, ?, 'received', ?, ?)
     `);
-    insertMovement.run(batchResult.lastInsertRowid, quantity, req.user.id);
+    insertMovement.run(batchResult.lastInsertRowid, quantity, req.user.id, req.user.business_id);
 
     return batchResult.lastInsertRowid;
   });
@@ -174,7 +243,7 @@ app.post('/products', requireAuth, requireAdmin, (req, res) => {
 });
 
 app.get('/products', requireAuth, (req, res) => {
-  res.json(getProductsWithStock());
+  res.json(getProductsWithStock(req.user.business_id));
 });
 
 app.get('/products/search', requireAuth, (req, res) => {
@@ -189,24 +258,33 @@ app.get('/products/search', requireAuth, (req, res) => {
     where += ' AND category = ?';
     params.push(category);
   }
-  res.json(getProductsWithStock(where, params));
+  res.json(getProductsWithStock(req.user.business_id, where, params));
 });
 
 app.get('/products/low-stock', requireAuth, (req, res) => {
   const threshold = parseInt(req.query.threshold) || 10;
-  const all = getProductsWithStock();
+  const all = getProductsWithStock(req.user.business_id);
   res.json(all.filter(p => p.quantity <= threshold));
 });
 
 app.get('/products/expiring-soon', requireAuth, (req, res) => {
   const days = parseInt(req.query.days) || 30;
   const cutoff = db.prepare(`SELECT date('now', '+' || ? || ' days') AS cutoff`).get(days).cutoff;
-  const all = getProductsWithStock();
+  const all = getProductsWithStock(req.user.business_id);
   res.json(all.filter(p => p.expiry_date && p.expiry_date <= cutoff));
 });
 
 app.get('/products/:id/history', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
+
+  // Confirm the product belongs to this business BEFORE returning its log.
+  // Not found in your business reads the same as not found at all — this
+  // route never confirms that a product id exists for someone else.
+  const product = db.prepare('SELECT id FROM products WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
+  if (!product) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+
   const stmt = db.prepare(`
     SELECT product_edit_log.id, product_edit_log.field_changed, product_edit_log.old_value,
            product_edit_log.new_value, product_edit_log.edited_at, users.name AS edited_by
@@ -231,14 +309,14 @@ app.put('/products/:id', requireAuth, requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Price must be a positive number' });
   }
 
-  const existingProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+  const existingProduct = db.prepare('SELECT * FROM products WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
   if (!existingProduct) {
     return res.status(404).json({ error: 'Product not found' });
   }
 
   const insertLog = db.prepare(`
-    INSERT INTO product_edit_log (product_id, edited_by_user_id, field_changed, old_value, new_value)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO product_edit_log (product_id, edited_by_user_id, field_changed, old_value, new_value, business_id)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const fieldsToCheck = { name, price, category, unit: unit || existingProduct.unit };
@@ -246,20 +324,26 @@ app.put('/products/:id', requireAuth, requireAdmin, (req, res) => {
     const oldVal = existingProduct[field];
     const newVal = fieldsToCheck[field];
     if (String(oldVal) !== String(newVal)) {
-      insertLog.run(id, req.user.id, field, String(oldVal), String(newVal));
+      insertLog.run(id, req.user.id, field, String(oldVal), String(newVal), req.user.business_id);
     }
   }
 
-  const stmt = db.prepare('UPDATE products SET name = ?, price = ?, category = ?, unit = ? WHERE id = ?');
-  stmt.run(name, price, category, unit || existingProduct.unit, id);
+  const stmt = db.prepare('UPDATE products SET name = ?, price = ?, category = ?, unit = ? WHERE id = ? AND business_id = ?');
+  stmt.run(name, price, category, unit || existingProduct.unit, id, req.user.business_id);
 
-  const updated = getProductsWithStock('WHERE id = ?', [id])[0];
+  const updated = getProductsWithStock(req.user.business_id, 'WHERE id = ?', [id])[0];
   res.json(updated);
 });
 
 app.delete('/products/:id', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
-  const batchCount = db.prepare('SELECT COUNT(*) AS count FROM batches WHERE product_id = ?').get(id).count;
+
+  const existingProduct = db.prepare('SELECT id FROM products WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
+  if (!existingProduct) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+
+  const batchCount = db.prepare('SELECT COUNT(*) AS count FROM batches WHERE product_id = ? AND business_id = ?').get(id, req.user.business_id).count;
 
   if (batchCount > 0) {
     return res.status(400).json({
@@ -267,8 +351,8 @@ app.delete('/products/:id', requireAuth, requireAdmin, (req, res) => {
     });
   }
 
-  const stmt = db.prepare('DELETE FROM products WHERE id = ?');
-  stmt.run(id);
+  const stmt = db.prepare('DELETE FROM products WHERE id = ? AND business_id = ?');
+  stmt.run(id, req.user.business_id);
   res.json({ deleted: id });
 });
 
@@ -277,12 +361,17 @@ app.delete('/products/:id', requireAuth, requireAdmin, (req, res) => {
 app.get('/products/:id/batches', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
 
+  const product = db.prepare('SELECT id FROM products WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
+  if (!product) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+
   const batches = db.prepare(`
     SELECT id, quantity_received, expiry_date, supplier, cost_price, received_at
     FROM batches
-    WHERE product_id = ?
+    WHERE product_id = ? AND business_id = ?
     ORDER BY expiry_date IS NULL, expiry_date ASC
-  `).all(id);
+  `).all(id, req.user.business_id);
 
   const result = batches.map(b => {
     const movements = db.prepare('SELECT movement_type, quantity_change FROM stock_movements WHERE batch_id = ?').all(b.id);
@@ -297,6 +386,11 @@ app.get('/products/:id/batches', requireAuth, requireAdmin, (req, res) => {
 
 app.get('/batches/:id/movements', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
+
+  const batch = db.prepare('SELECT id FROM batches WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
+  if (!batch) {
+    return res.status(404).json({ error: 'Batch not found' });
+  }
 
   const stmt = db.prepare(`
     SELECT stock_movements.id, stock_movements.movement_type, stock_movements.quantity_change,
@@ -313,14 +407,14 @@ app.put('/batches/:id', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
   const { expiry_date, supplier, cost_price } = req.body;
 
-  const existingBatch = db.prepare('SELECT * FROM batches WHERE id = ?').get(id);
+  const existingBatch = db.prepare('SELECT * FROM batches WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
   if (!existingBatch) {
     return res.status(404).json({ error: 'Batch not found' });
   }
 
   const insertLog = db.prepare(`
-    INSERT INTO batch_edit_log (batch_id, edited_by_user_id, field_changed, old_value, new_value)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO batch_edit_log (batch_id, edited_by_user_id, field_changed, old_value, new_value, business_id)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const fieldsToCheck = { expiry_date: expiry_date || null, supplier: supplier || null, cost_price: cost_price != null ? cost_price : null };
@@ -328,12 +422,12 @@ app.put('/batches/:id', requireAuth, requireAdmin, (req, res) => {
     const oldVal = existingBatch[field];
     const newVal = fieldsToCheck[field];
     if (String(oldVal) !== String(newVal)) {
-      insertLog.run(id, req.user.id, field, String(oldVal), String(newVal));
+      insertLog.run(id, req.user.id, field, String(oldVal), String(newVal), req.user.business_id);
     }
   }
 
-  db.prepare('UPDATE batches SET expiry_date = ?, supplier = ?, cost_price = ? WHERE id = ?')
-    .run(expiry_date || null, supplier || null, cost_price != null ? cost_price : null, id);
+  db.prepare('UPDATE batches SET expiry_date = ?, supplier = ?, cost_price = ? WHERE id = ? AND business_id = ?')
+    .run(expiry_date || null, supplier || null, cost_price != null ? cost_price : null, id, req.user.business_id);
 
   res.json({ id, expiry_date, supplier, cost_price });
 });
@@ -349,7 +443,7 @@ app.post('/batches/:id/correct', requireAuth, requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'A reason is required for stock corrections' });
   }
 
-  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(id);
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
   if (!batch) {
     return res.status(404).json({ error: 'Batch not found' });
   }
@@ -364,9 +458,9 @@ app.post('/batches/:id/correct', requireAuth, requireAdmin, (req, res) => {
   }
 
   db.prepare(`
-    INSERT INTO stock_movements (batch_id, quantity_change, movement_type, user_id, notes)
-    VALUES (?, ?, 'correction', ?, ?)
-  `).run(id, delta, req.user.id, reason.trim());
+    INSERT INTO stock_movements (batch_id, quantity_change, movement_type, user_id, notes, business_id)
+    VALUES (?, ?, 'correction', ?, ?, ?)
+  `).run(id, delta, req.user.id, reason.trim(), req.user.business_id);
 
   res.json({ batch_id: id, previous_quantity: currentRemaining, new_quantity, delta, reason: reason.trim() });
 });
@@ -374,7 +468,7 @@ app.post('/batches/:id/correct', requireAuth, requireAdmin, (req, res) => {
 app.delete('/batches/:id', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
 
-  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(id);
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
   if (!batch) {
     return res.status(404).json({ error: 'Batch not found' });
   }
@@ -390,7 +484,7 @@ app.delete('/batches/:id', requireAuth, requireAdmin, (req, res) => {
 
   const deleteBatch = db.transaction(() => {
     db.prepare('DELETE FROM stock_movements WHERE batch_id = ?').run(id);
-    db.prepare('DELETE FROM batches WHERE id = ?').run(id);
+    db.prepare('DELETE FROM batches WHERE id = ? AND business_id = ?').run(id, req.user.business_id);
   });
   deleteBatch();
 
@@ -404,7 +498,7 @@ app.delete('/batches/:id', requireAuth, requireAdmin, (req, res) => {
 app.post('/sales', requireAuth, (req, res) => {
   const { product_id, quantity_sold } = req.body;
 
-  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(product_id);
+  const product = db.prepare('SELECT * FROM products WHERE id = ? AND business_id = ?').get(product_id, req.user.business_id);
   if (!product) {
     return res.status(404).json({ error: 'Product not found' });
   }
@@ -416,9 +510,9 @@ app.post('/sales', requireAuth, (req, res) => {
     SELECT b.id, b.expiry_date,
       COALESCE((SELECT SUM(quantity_change) FROM stock_movements WHERE batch_id = b.id), 0) AS remaining
     FROM batches b
-    WHERE b.product_id = ?
+    WHERE b.product_id = ? AND b.business_id = ?
     ORDER BY CASE WHEN b.expiry_date IS NULL THEN 1 ELSE 0 END, b.expiry_date ASC
-  `).all(product_id).filter(b => b.remaining > 0);
+  `).all(product_id, req.user.business_id).filter(b => b.remaining > 0);
 
   const totalAvailable = batches.reduce((sum, b) => sum + b.remaining, 0);
   if (quantity_sold > totalAvailable) {
@@ -427,21 +521,21 @@ app.post('/sales', requireAuth, (req, res) => {
 
   const runSale = db.transaction(() => {
     const insertSale = db.prepare(`
-      INSERT INTO sales (product_id, quantity_sold, sale_price, sold_by_user_id)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO sales (product_id, quantity_sold, sale_price, sold_by_user_id, business_id)
+      VALUES (?, ?, ?, ?, ?)
     `);
-    const saleResult = insertSale.run(product_id, quantity_sold, product.price, req.user.id);
+    const saleResult = insertSale.run(product_id, quantity_sold, product.price, req.user.id, req.user.business_id);
 
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (batch_id, quantity_change, movement_type, sale_id, user_id)
-      VALUES (?, ?, 'sale', ?, ?)
+      INSERT INTO stock_movements (batch_id, quantity_change, movement_type, sale_id, user_id, business_id)
+      VALUES (?, ?, 'sale', ?, ?, ?)
     `);
 
     let remainingToDeduct = quantity_sold;
     for (const batch of batches) {
       if (remainingToDeduct <= 0) break;
       const takeFromBatch = Math.min(batch.remaining, remainingToDeduct);
-      insertMovement.run(batch.id, -takeFromBatch, saleResult.lastInsertRowid, req.user.id);
+      insertMovement.run(batch.id, -takeFromBatch, saleResult.lastInsertRowid, req.user.id, req.user.business_id);
       remainingToDeduct -= takeFromBatch;
     }
 
@@ -449,7 +543,7 @@ app.post('/sales', requireAuth, (req, res) => {
   });
 
   const saleId = runSale();
-  const newStock = getProductsWithStock('WHERE id = ?', [product_id])[0];
+  const newStock = getProductsWithStock(req.user.business_id, 'WHERE id = ?', [product_id])[0];
 
   res.json({
     sale_id: saleId,
@@ -466,9 +560,10 @@ app.get('/sales', requireAuth, (req, res) => {
            products.name AS product_name
     FROM sales
     JOIN products ON sales.product_id = products.id
+    WHERE sales.business_id = ?
     ORDER BY sales.sold_at DESC
   `);
-  res.json(stmt.all());
+  res.json(stmt.all(req.user.business_id));
 });
 
 // ==================== SERVER ====================
