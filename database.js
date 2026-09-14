@@ -40,8 +40,8 @@ const productColumns = db.prepare("PRAGMA table_info(products)").all().map(col =
 if (!productColumns.includes('unit')) {
   db.exec("ALTER TABLE products ADD COLUMN unit TEXT NOT NULL DEFAULT 'units'");
 }
-if (!productColumns.includes('business_id')) {
-  db.exec('ALTER TABLE products ADD COLUMN business_id INTEGER NOT NULL DEFAULT 1');
+if (!productColumns.includes('no_expiry')) {
+  db.exec('ALTER TABLE products ADD COLUMN no_expiry INTEGER NOT NULL DEFAULT 0');
 }
 
 // ==================== BATCHES — one row per delivery of stock. ====================

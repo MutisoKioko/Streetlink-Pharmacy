@@ -34,7 +34,22 @@ app.use(express.static('public'));
 
 // ==================== HELPERS ====================
 
-function validateProduct(name, price, quantity, expiry_date, no_expiry) {
+// effectiveNoExpiry is the CALLER'S resolved decision (DB value for restocks,
+// request value for new products) — this function trusts it, it doesn't decide it.
+function validateExpiry(expiry_date, effectiveNoExpiry) {
+  if (!effectiveNoExpiry && (!expiry_date || expiry_date.trim() === '')) {
+    return 'Expiry date is required unless this item is marked as non-expiring';
+  }
+  if (expiry_date && expiry_date.trim() !== '') {
+    const today = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+    if (expiry_date.trim() < today) {
+      return 'Expiry date cannot be in the past';
+    }
+  }
+  return null;
+}
+
+function validateProduct(name, price, quantity, expiry_date, effectiveNoExpiry) {
   if (!name || typeof name !== 'string' || name.trim() === '') {
     return 'Product name is required';
   }
@@ -44,10 +59,7 @@ function validateProduct(name, price, quantity, expiry_date, no_expiry) {
   if (typeof quantity !== 'number' || isNaN(quantity) || quantity < 0) {
     return 'Quantity cannot be negative';
   }
-  if (!no_expiry && (!expiry_date || expiry_date.trim() === '')) {
-    return 'Expiry date is required unless this item is marked as non-expiring';
-  }
-  return null;
+  return validateExpiry(expiry_date, effectiveNoExpiry);
 }
 
 // Computes each product's total stock and nearest expiry by aggregating its batches
@@ -195,23 +207,28 @@ app.post('/register-business', async (req, res) => {
 app.post('/products', requireAuth, requireAdmin, (req, res) => {
   const { name, price, quantity, category, supplier, expiry_date, cost_price, no_expiry, unit } = req.body;
 
-  const error = validateProduct(name, price, quantity, expiry_date, no_expiry);
+  // Look up first — restocks need the PRODUCT's own no_expiry, not the request's.
+  let product = db.prepare('SELECT * FROM products WHERE name = ? AND business_id = ?')
+    .get(name && name.trim(), req.user.business_id);
+
+  const wasExisting = !!product;
+  // Existing product: trust what's already in the database — no_expiry is a
+  // property of the product, not something a restock request gets to redecide.
+  // New product: trust whoever's creating it, since nothing else has an opinion yet.
+  const effectiveNoExpiry = wasExisting ? !!product.no_expiry : !!no_expiry;
+
+  const error = validateProduct(name, price, quantity, expiry_date, effectiveNoExpiry);
   if (error) {
     return res.status(400).json({ error });
   }
 
   // Scoped by business: two different pharmacies can both have a product
   // named "Panadol" without colliding — they're different rows entirely.
-  let product = db.prepare('SELECT * FROM products WHERE name = ? AND business_id = ?')
-    .get(name.trim(), req.user.business_id);
-
-  const wasExisting = !!product;
-
   const createBatchAndMovement = db.transaction(() => {
     if (!product) {
-      const insertProduct = db.prepare('INSERT INTO products (name, category, price, unit, business_id) VALUES (?, ?, ?, ?, ?)');
-      const result = insertProduct.run(name.trim(), category || null, price, (unit && unit.trim()) || 'units', req.user.business_id);
-      product = { id: result.lastInsertRowid, name: name.trim(), category, price, unit: (unit && unit.trim()) || 'units' };
+      const insertProduct = db.prepare('INSERT INTO products (name, category, price, unit, business_id, no_expiry) VALUES (?, ?, ?, ?, ?, ?)');
+      const result = insertProduct.run(name.trim(), category || null, price, (unit && unit.trim()) || 'units', req.user.business_id, effectiveNoExpiry ? 1 : 0);
+      product = { id: result.lastInsertRowid, name: name.trim(), category, price, unit: (unit && unit.trim()) || 'units', no_expiry: effectiveNoExpiry ? 1 : 0 };
     }
 
     const insertBatch = db.prepare(`
@@ -238,6 +255,7 @@ app.post('/products', requireAuth, requireAdmin, (req, res) => {
     quantity, category, supplier, expiry_date,
     actual_price: product.price,
     actual_unit: product.unit,
+    no_expiry: effectiveNoExpiry,
     was_existing: wasExisting
   });
 });
@@ -407,9 +425,23 @@ app.put('/batches/:id', requireAuth, requireAdmin, (req, res) => {
   const { id } = req.params;
   const { expiry_date, supplier, cost_price } = req.body;
 
-  const existingBatch = db.prepare('SELECT * FROM batches WHERE id = ? AND business_id = ?').get(id, req.user.business_id);
+  // Join to products to find out whether the PARENT PRODUCT is non-expiring —
+  // that's what decides if a missing expiry_date is allowed here, not anything on the batch itself.
+  const existingBatch = db.prepare(`
+    SELECT batches.*, products.no_expiry AS product_no_expiry
+    FROM batches
+    JOIN products ON batches.product_id = products.id
+    WHERE batches.id = ? AND batches.business_id = ?
+  `).get(id, req.user.business_id);
+
   if (!existingBatch) {
     return res.status(404).json({ error: 'Batch not found' });
+  }
+
+  const effectiveNoExpiry = !!existingBatch.product_no_expiry;
+  const error = validateExpiry(expiry_date, effectiveNoExpiry);
+  if (error) {
+    return res.status(400).json({ error });
   }
 
   const insertLog = db.prepare(`

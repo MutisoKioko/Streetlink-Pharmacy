@@ -166,7 +166,7 @@ function renderBatchesTable(productId, batches, container) {
         <tr class="edit-row">
           <td colspan="8">
             <div class="edit-form">
-              <input id="batch-edit-expiry-${b.id}" value="${b.expiry_date || ''}" placeholder="YYYY-MM-DD">
+              <input type="date" id="batch-edit-expiry-${b.id}" value="${b.expiry_date || ''}">
               <input id="batch-edit-supplier-${b.id}" value="${b.supplier || ''}" placeholder="Supplier">
               <input id="batch-edit-cost-${b.id}" type="number" value="${b.cost_price || ''}" placeholder="Cost Price">
               <button onclick="saveBatchEdit(${b.id}, ${productId})">Save</button>
