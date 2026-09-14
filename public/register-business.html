@@ -1,99 +1,39 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Register Business - Multi-Tenant Admin</title>
-    <link rel="stylesheet" href="css/style.css">
+  <meta charset="UTF-8">
+  <title>Create Your Business Account — Streetlink Pharmacy</title>
+  <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+  <div class="container">
     <div class="top-bar">
-        <h1>Register Business</h1>
+      <h1>Create Your Pharmacy Account</h1>
     </div>
 
-    <div class="container">
-        <div class="card">
-            <h2>Create Your Account</h2>
-            
-            <div id="error-box" class="error" style="display: none;"></div>
-            <div id="success-box" class="success" style="display: none;"></div>
+    <div class="card">
+      <p style="margin-top:0;color:#666;font-size:14px;">
+        Set up your business — you'll be the first admin, and can add staff afterward from the admin panel.
+      </p>
+      <div id="errorBox" class="error" style="display:none;"></div>
+      <div id="successBox" style="display:none; color:#0d6e6e; margin-bottom:12px;"></div>
 
-            <form id="registerForm">
-                <div class="form-group">
-                    <label for="business-name">Business Name</label>
-                    <input 
-                        type="text" 
-                        id="business-name" 
-                        name="business-name" 
-                        required
-                        placeholder="Your business name"
-                    >
-                </div>
+      <form id="registerBusinessForm">
+        <input type="text" id="business-name" placeholder="Business name" required>
+        <input type="text" id="admin-name" placeholder="Your full name" required>
+        <input type="email" id="admin-email" placeholder="Your email" required>
+        <input type="tel" id="admin-phone" placeholder="Your phone number" required>
+        <input type="password" id="admin-password" placeholder="Password (min 6 chars)" required>
+        <input type="password" id="admin-confirm-password" placeholder="Confirm password" required>
+        <button type="submit">Create Account</button>
+      </form>
 
-                <div class="form-group">
-                    <label for="admin-name">Admin Name</label>
-                    <input 
-                        type="text" 
-                        id="admin-name" 
-                        name="admin-name" 
-                        required
-                        placeholder="Your full name"
-                    >
-                </div>
-
-                <div class="form-group">
-                    <label for="email">Email</label>
-                    <input 
-                        type="email" 
-                        id="email" 
-                        name="email" 
-                        required
-                        placeholder="your@email.com"
-                    >
-                </div>
-
-                <div class="form-group">
-                    <label for="phone">Phone</label>
-                    <input 
-                        type="tel" 
-                        id="phone" 
-                        name="phone" 
-                        required
-                        placeholder="+254 XXX XXX XXX"
-                    >
-                </div>
-
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input 
-                        type="password" 
-                        id="password" 
-                        name="password" 
-                        required
-                        placeholder="At least 8 characters"
-                    >
-                </div>
-
-                <div class="form-group">
-                    <label for="confirm-password">Confirm Password</label>
-                    <input 
-                        type="password" 
-                        id="confirm-password" 
-                        name="confirm-password" 
-                        required
-                        placeholder="Re-enter your password"
-                    >
-                </div>
-
-                <button type="submit" class="btn">Create Account</button>
-            </form>
-
-            <p class="secondary">
-                Already have an account? <a href="index.html">Sign in here</a>
-            </p>
-        </div>
+      <p style="font-size:14px;margin-top:16px;">
+        Already have an account? <a href="/index.html">Log in</a>
+      </p>
     </div>
+  </div>
 
-    <script src="js/register-business.js"></script>
+  <script src="/js/register-business.js"></script>
 </body>
 </html>
